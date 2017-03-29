@@ -2,6 +2,7 @@ package org.nypl.simplified.app.reader;
 
 import android.app.Activity;
 import android.app.FragmentManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.res.Configuration;
@@ -9,6 +10,7 @@ import android.content.res.Resources;
 import android.graphics.ColorMatrixColorFilter;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
 import android.view.View.OnClickListener;
 import android.view.View.OnLongClickListener;
@@ -24,6 +26,13 @@ import com.io7m.jfunctional.FunctionType;
 import com.io7m.jfunctional.OptionType;
 import com.io7m.jnull.NullCheck;
 import com.io7m.jnull.Nullable;
+import com.sonydadc.urms.android.UrmsError;
+import com.sonydadc.urms.android.task.EmptyResponse;
+import com.sonydadc.urms.android.task.IFailedCallback;
+import com.sonydadc.urms.android.task.ISucceededCallback;
+import com.sonydadc.urms.android.task.IUrmsTask;
+import com.sonydadc.urms.android.task.UrmsTaskStatus;
+
 import org.nypl.simplified.app.R;
 import org.nypl.simplified.app.Simplified;
 import org.nypl.simplified.app.SimplifiedReaderAppServicesType;
@@ -42,8 +51,13 @@ import org.readium.sdk.android.Package;
 import org.slf4j.Logger;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.net.URI;
 import java.util.List;
+
+import bclurms.UrmsEvaluateLicenseRequest;
+import bclurms.UrmsRegisterBookRequest;
 
 /**
  * The main reader activity for reading an EPUB.
@@ -91,6 +105,11 @@ public final class ReaderActivity extends Activity implements
   private @Nullable WebView                           view_web_view;
   private @Nullable ReaderReadiumViewerSettings       viewer_settings;
   private           boolean                           web_view_resized;
+
+  // Added by Bluefire
+  private static final String TAG = "ReaderActivity";
+  // End Added by Bluefire
+
 
   /**
    * Construct an activity.
@@ -260,150 +279,231 @@ public final class ReaderActivity extends Activity implements
     final Intent i = NullCheck.notNull(this.getIntent());
     final Bundle a = NullCheck.notNull(i.getExtras());
 
-    final File in_epub_file =
-      NullCheck.notNull((File) a.getSerializable(ReaderActivity.FILE_ID));
-    this.book_id =
-      NullCheck.notNull((BookID) a.getSerializable(ReaderActivity.BOOK_ID));
 
-    ReaderActivity.LOG.debug("epub file: {}", in_epub_file);
-    ReaderActivity.LOG.debug("book id:   {}", this.book_id);
+    // Bluefire Added
+//    File epubFolder = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+//    ReaderActivity.LOG.debug("epubFolder: {}", epubFolder);
+//    final File in_epub_file =
+//      NullCheck.notNull((File) a.getSerializable(ReaderActivity.FILE_ID));
+//
+//    final File in_epub_file = new File(epubFolder, "iliaddrm.epub");
+//    ReaderActivity.LOG.debug("epub file: {}", in_epub_file);
 
-    final SimplifiedReaderAppServicesType rs =
-      Simplified.getReaderAppServices();
 
-    final ReaderSettingsType settings = rs.getSettings();
-    settings.addListener(this);
+    // Read file from Assets and write to internal storage
+    File f = new File(getCacheDir() + "/iliad.epub");
+    if (!f.exists()) try {
+      InputStream is = getAssets().open("iliad.epub");
+      int size = is.available();
+      byte[] buffer = new byte[size];
+      is.read(buffer);
+      is.close();
+      FileOutputStream fos = new FileOutputStream(f);
+      fos.write(buffer);
+      fos.close();
+    } catch (Exception e) { throw new RuntimeException(e); }
+    final File in_epub_file = new File(getCacheDir(), "iliad.epub");
+//    String path = getCacheDir() + "/iliad.epub";
 
-    this.viewer_settings = new ReaderReadiumViewerSettings(
-      SyntheticSpreadMode.SINGLE, ScrollMode.AUTO, (int) settings.getFontScale(), 20);
 
-    final ReaderReadiumFeedbackDispatcherType rd =
-      ReaderReadiumFeedbackDispatcher.newDispatcher();
-    final ReaderSimplifiedFeedbackDispatcherType sd =
-      ReaderSimplifiedFeedbackDispatcher.newDispatcher();
+    ReaderActivity.LOG.debug("ReaderActivity", "before evaluateURMSLicense called");
+    String bookCCID = "EMK5RVU84CA858XW63596X769AVENTQN";
+    String bookUri = in_epub_file.getAbsolutePath();
+    ReaderActivity.LOG.debug("ReaderActivity - bookUri", bookUri);
 
-    final ViewGroup in_hud = NullCheck.notNull(
-      (ViewGroup) this.findViewById(
-        R.id.reader_hud_container));
-    final ImageView in_toc =
-      NullCheck.notNull((ImageView) in_hud.findViewById(R.id.reader_toc));
-    final ImageView in_settings =
-      NullCheck.notNull((ImageView) in_hud.findViewById(R.id.reader_settings));
-    final TextView in_title_text =
-      NullCheck.notNull((TextView) in_hud.findViewById(R.id.reader_title_text));
-    final TextView in_progress_text = NullCheck.notNull(
-      (TextView) in_hud.findViewById(
-        R.id.reader_position_text));
-    final ProgressBar in_progress_bar = NullCheck.notNull(
-      (ProgressBar) in_hud.findViewById(
-        R.id.reader_position_progress));
+    evaluateURMSLicense(bookCCID, bookUri, getApplicationContext(), a, in_epub_file);
+    ReaderActivity.LOG.debug("ReaderActivity", "after evaluateURMSLicense called");
+  }
 
-    final ViewGroup in_media_overlay =
-      NullCheck.notNull((ViewGroup) this.findViewById(R.id.reader_hud_media));
-    final ImageView in_media_previous = NullCheck.notNull(
-      (ImageView) this.findViewById(
-        R.id.reader_hud_media_previous));
-    final ImageView in_media_next = NullCheck.notNull(
-      (ImageView) this.findViewById(
-        R.id.reader_hud_media_next));
-    final ImageView in_media_play = NullCheck.notNull(
-      (ImageView) this.findViewById(
-        R.id.reader_hud_media_play));
+  public void evaluateURMSLicense(final String bookCCID, final String bookUri, final Context mContext, final Bundle bundle, final File in_epub_file) {
+    Log.e(TAG, "[evaluateURMSLicense] bookCCID = " + bookCCID);
 
-    final ProgressBar in_loading =
-      NullCheck.notNull((ProgressBar) this.findViewById(R.id.reader_loading));
-    final WebView in_webview =
-      NullCheck.notNull((WebView) this.findViewById(R.id.reader_webview));
+    UrmsEvaluateLicenseRequest evaluateLicenseRequest = new UrmsEvaluateLicenseRequest();
+    UrmsError error = evaluateLicenseRequest.execute(bookCCID);
+    if (error.isError()) {
+      Log.e(TAG, "[evaluateURMSLicense] Registering book...");
 
-    this.view_root = NullCheck.notNull(in_hud.getRootView());
+      UrmsRegisterBookRequest registerBookRequest = new UrmsRegisterBookRequest();
 
-    in_loading.setVisibility(View.VISIBLE);
-    in_progress_bar.setVisibility(View.INVISIBLE);
-    in_progress_text.setVisibility(View.INVISIBLE);
-    in_webview.setVisibility(View.INVISIBLE);
-    in_hud.setVisibility(View.VISIBLE);
-    in_media_overlay.setVisibility(View.INVISIBLE);
-
-    in_settings.setOnClickListener(
-      new OnClickListener()
-      {
-        @Override public void onClick(
-          final @Nullable View v)
-        {
-          final FragmentManager fm = ReaderActivity.this.getFragmentManager();
-          final ReaderSettingsDialog d = new ReaderSettingsDialog();
-          d.show(fm, "settings-dialog");
+      ISucceededCallback succeededCallback = new ISucceededCallback<EmptyResponse>() {
+        @Override
+        public void onSucceeded(IUrmsTask task, EmptyResponse result) {
+          Log.e(TAG, "Register book task succeeded.");
+          evaluateURMSLicense(bookCCID, bookUri, mContext, bundle, in_epub_file); // Call self after registerBookTask succeeds, to evaluate again
         }
-      });
+      };
 
-    this.view_loading = in_loading;
-    this.view_progress_text = in_progress_text;
-    this.view_progress_bar = in_progress_bar;
-    this.view_title_text = in_title_text;
-    this.view_web_view = in_webview;
-    this.view_hud = in_hud;
-    this.view_toc = in_toc;
-    this.view_settings = in_settings;
-    this.web_view_resized = true;
-    this.view_media = in_media_overlay;
-    this.view_media_next = in_media_next;
-    this.view_media_prev = in_media_previous;
-    this.view_media_play = in_media_play;
+      IFailedCallback failedCallback = new IFailedCallback() {
+        @Override
+        public void onFailed(IUrmsTask task, UrmsTaskStatus status, UrmsError error) {
+          Log.e(TAG, "Register book task failed.");
+          Log.e(TAG, error.getErrorCode());
 
-    final WebChromeClient wc_client = new WebChromeClient()
-    {
-      @Override public void onShowCustomView(
-        final @Nullable View view,
-        final @Nullable CustomViewCallback callback)
-      {
-        super.onShowCustomView(view, callback);
-        ReaderActivity.LOG.debug("web-chrome: {}", view);
-      }
-    };
-
-    final WebViewClient wv_client =
-      new ReaderWebViewClient(this, sd, this, rd, this);
-    in_webview.setBackgroundColor(0x00000000);
-    in_webview.setWebChromeClient(wc_client);
-    in_webview.setWebViewClient(wv_client);
-    in_webview.setOnLongClickListener(
-      new OnLongClickListener()
-      {
-        @Override public boolean onLongClick(
-          final @Nullable View v)
-        {
-          ReaderActivity.LOG.debug("ignoring long click on web view");
-          return true;
+          if (status != UrmsTaskStatus.Cancelled) {
+            if (error.getErrorType() == UrmsError.NetworkError || error.getErrorType() == UrmsError.NetworkTimeout) {
+              Log.e(TAG, "Network Error or Network Timeout.");
+            } else if (error.getErrorType() == UrmsError.UrmsNotInitialized) {
+              Log.e(TAG, "URMS not initialized.");
+            } else if (error.getErrorType() == UrmsError.NoBook) {
+              Log.e(TAG, "Invalid License.");
+            } else if (error.getErrorType() == UrmsError.NotAuthorized) {
+              Log.e(TAG, "Not Authorized.");
+            } else {
+              Log.e(TAG, "Other error occurred.");
+            }
+          }
         }
-      });
+      };
 
-    // Allow the webview to be debuggable only if this is a dev build
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-      if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
-        WebView.setWebContentsDebuggingEnabled(true);
+      registerBookRequest.execute(bookCCID, bookUri, succeededCallback, failedCallback);
+      Log.e(TAG, "Register book task executed.");
+    } else {
+      Log.e(TAG, "No error from evaluateURMSLicense. Opening book.");
+
+
+      // End Bluefire Added
+
+      this.book_id =
+              NullCheck.notNull((BookID) getIntent().getExtras().getSerializable(ReaderActivity.BOOK_ID));
+
+      ReaderActivity.LOG.debug("epub file: {}", in_epub_file);
+      ReaderActivity.LOG.debug("book id:   {}", this.book_id);
+
+      final SimplifiedReaderAppServicesType rs =
+              Simplified.getReaderAppServices();
+
+      final ReaderSettingsType settings = rs.getSettings();
+      settings.addListener(this);
+
+      this.viewer_settings = new ReaderReadiumViewerSettings(
+              SyntheticSpreadMode.SINGLE, ScrollMode.AUTO, (int) settings.getFontScale(), 20);
+
+      final ReaderReadiumFeedbackDispatcherType rd =
+              ReaderReadiumFeedbackDispatcher.newDispatcher();
+      final ReaderSimplifiedFeedbackDispatcherType sd =
+              ReaderSimplifiedFeedbackDispatcher.newDispatcher();
+
+      final ViewGroup in_hud = NullCheck.notNull(
+              (ViewGroup) this.findViewById(
+                      R.id.reader_hud_container));
+      final ImageView in_toc =
+              NullCheck.notNull((ImageView) in_hud.findViewById(R.id.reader_toc));
+      final ImageView in_settings =
+              NullCheck.notNull((ImageView) in_hud.findViewById(R.id.reader_settings));
+      final TextView in_title_text =
+              NullCheck.notNull((TextView) in_hud.findViewById(R.id.reader_title_text));
+      final TextView in_progress_text = NullCheck.notNull(
+              (TextView) in_hud.findViewById(
+                      R.id.reader_position_text));
+      final ProgressBar in_progress_bar = NullCheck.notNull(
+              (ProgressBar) in_hud.findViewById(
+                      R.id.reader_position_progress));
+
+      final ViewGroup in_media_overlay =
+              NullCheck.notNull((ViewGroup) this.findViewById(R.id.reader_hud_media));
+      final ImageView in_media_previous = NullCheck.notNull(
+              (ImageView) this.findViewById(
+                      R.id.reader_hud_media_previous));
+      final ImageView in_media_next = NullCheck.notNull(
+              (ImageView) this.findViewById(
+                      R.id.reader_hud_media_next));
+      final ImageView in_media_play = NullCheck.notNull(
+              (ImageView) this.findViewById(
+                      R.id.reader_hud_media_play));
+
+      final ProgressBar in_loading =
+              NullCheck.notNull((ProgressBar) this.findViewById(R.id.reader_loading));
+      final WebView in_webview =
+              NullCheck.notNull((WebView) this.findViewById(R.id.reader_webview));
+
+      this.view_root = NullCheck.notNull(in_hud.getRootView());
+
+      in_loading.setVisibility(View.VISIBLE);
+      in_progress_bar.setVisibility(View.INVISIBLE);
+      in_progress_text.setVisibility(View.INVISIBLE);
+      in_webview.setVisibility(View.INVISIBLE);
+      in_hud.setVisibility(View.VISIBLE);
+      in_media_overlay.setVisibility(View.INVISIBLE);
+
+      in_settings.setOnClickListener(
+              new OnClickListener() {
+                @Override
+                public void onClick(
+                        final @Nullable View v) {
+                  final FragmentManager fm = ReaderActivity.this.getFragmentManager();
+                  final ReaderSettingsDialog d = new ReaderSettingsDialog();
+                  d.show(fm, "settings-dialog");
+                }
+              });
+
+      this.view_loading = in_loading;
+      this.view_progress_text = in_progress_text;
+      this.view_progress_bar = in_progress_bar;
+      this.view_title_text = in_title_text;
+      this.view_web_view = in_webview;
+      this.view_hud = in_hud;
+      this.view_toc = in_toc;
+      this.view_settings = in_settings;
+      this.web_view_resized = true;
+      this.view_media = in_media_overlay;
+      this.view_media_next = in_media_next;
+      this.view_media_prev = in_media_previous;
+      this.view_media_play = in_media_play;
+
+      final WebChromeClient wc_client = new WebChromeClient() {
+        @Override
+        public void onShowCustomView(
+                final @Nullable View view,
+                final @Nullable CustomViewCallback callback) {
+          super.onShowCustomView(view, callback);
+          ReaderActivity.LOG.debug("web-chrome: {}", view);
+        }
+      };
+
+      final WebViewClient wv_client =
+              new ReaderWebViewClient(this, sd, this, rd, this);
+      in_webview.setBackgroundColor(0x00000000);
+      in_webview.setWebChromeClient(wc_client);
+      in_webview.setWebViewClient(wv_client);
+      in_webview.setOnLongClickListener(
+              new OnLongClickListener() {
+                @Override
+                public boolean onLongClick(
+                        final @Nullable View v) {
+                  ReaderActivity.LOG.debug("ignoring long click on web view");
+                  return true;
+                }
+              });
+
+      // Allow the webview to be debuggable only if this is a dev build
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+          WebView.setWebContentsDebuggingEnabled(true);
+        }
       }
+
+      final WebSettings s = NullCheck.notNull(in_webview.getSettings());
+      s.setAppCacheEnabled(false);
+      s.setAllowFileAccess(false);
+      s.setAllowFileAccessFromFileURLs(false);
+      s.setAllowContentAccess(false);
+      s.setAllowUniversalAccessFromFileURLs(false);
+      s.setSupportMultipleWindows(false);
+      s.setCacheMode(WebSettings.LOAD_NO_CACHE);
+      s.setGeolocationEnabled(false);
+      s.setJavaScriptEnabled(true);
+
+      this.readium_js_api = ReaderReadiumJavaScriptAPI.newAPI(in_webview);
+      this.simplified_js_api = ReaderSimplifiedJavaScriptAPI.newAPI(in_webview);
+
+      in_title_text.setText("");
+
+      final ReaderReadiumEPUBLoaderType pl = rs.getEPUBLoader();
+      pl.loadEPUB(in_epub_file, this);
+
+      this.applyViewerColorFilters();
+
     }
-
-    final WebSettings s = NullCheck.notNull(in_webview.getSettings());
-    s.setAppCacheEnabled(false);
-    s.setAllowFileAccess(false);
-    s.setAllowFileAccessFromFileURLs(false);
-    s.setAllowContentAccess(false);
-    s.setAllowUniversalAccessFromFileURLs(false);
-    s.setSupportMultipleWindows(false);
-    s.setCacheMode(WebSettings.LOAD_NO_CACHE);
-    s.setGeolocationEnabled(false);
-    s.setJavaScriptEnabled(true);
-
-    this.readium_js_api = ReaderReadiumJavaScriptAPI.newAPI(in_webview);
-    this.simplified_js_api = ReaderSimplifiedJavaScriptAPI.newAPI(in_webview);
-
-    in_title_text.setText("");
-
-    final ReaderReadiumEPUBLoaderType pl = rs.getEPUBLoader();
-    pl.loadEPUB(in_epub_file, this);
-
-    this.applyViewerColorFilters();
   }
 
   @Override public void onCurrentPageError(

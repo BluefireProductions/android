@@ -54,8 +54,10 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.URI;
+import java.security.SignatureException;
 import java.util.List;
 
+import bclurms.UrmsCreateProfileRequest;
 import bclurms.UrmsEvaluateLicenseRequest;
 import bclurms.UrmsRegisterBookRequest;
 
@@ -290,10 +292,12 @@ public final class ReaderActivity extends Activity implements
 //    ReaderActivity.LOG.debug("epub file: {}", in_epub_file);
 
 
+    ReaderActivity.LOG.debug("ReaderActivity", "before reading file from Assets and writing to internal storage");
+
     // Read file from Assets and write to internal storage
-    File f = new File(getCacheDir() + "/iliad.epub");
+    File f = new File(getCacheDir() + "/iliaddrm.epub");
     if (!f.exists()) try {
-      InputStream is = getAssets().open("iliad.epub");
+      InputStream is = getAssets().open("iliaddrm.epub");
       int size = is.available();
       byte[] buffer = new byte[size];
       is.read(buffer);
@@ -302,15 +306,22 @@ public final class ReaderActivity extends Activity implements
       fos.write(buffer);
       fos.close();
     } catch (Exception e) { throw new RuntimeException(e); }
-    final File in_epub_file = new File(getCacheDir(), "iliad.epub");
+    final File in_epub_file = new File(getCacheDir(), "iliaddrm.epub");
 //    String path = getCacheDir() + "/iliad.epub";
 
 
     ReaderActivity.LOG.debug("ReaderActivity", "before evaluateURMSLicense called");
-    String bookCCID = "EMK5RVU84CA858XW63596X769AVENTQN";
+    String bookCCID = "NHG6M6VG63D4DQKJMC986FYFDG5MDQJE";
     String bookUri = in_epub_file.getAbsolutePath();
     ReaderActivity.LOG.debug("ReaderActivity - bookUri", bookUri);
 
+
+    ReaderActivity.LOG.debug("ReaderActivity", "Requesting authToken…");
+    try {
+      UrmsCreateProfileRequest.requestAuthToken();
+    } catch (SignatureException e) {
+      e.printStackTrace();
+    }
     evaluateURMSLicense(bookCCID, bookUri, getApplicationContext(), a, in_epub_file);
     ReaderActivity.LOG.debug("ReaderActivity", "after evaluateURMSLicense called");
   }

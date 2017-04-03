@@ -273,7 +273,9 @@ public final class ReaderActivity extends Activity implements
   @Override protected void onCreate(
     final @Nullable Bundle state)
   {
+    ReaderActivity.LOG.debug("ReaderActivity", "onCreate");
     super.onCreate(state);
+    ReaderActivity.LOG.debug("ReaderActivity", "onCreate - setting content view");
     this.setContentView(R.layout.reader);
 
     ReaderActivity.LOG.debug("starting");
